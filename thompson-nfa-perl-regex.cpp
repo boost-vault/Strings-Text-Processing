@@ -13,43 +13,44 @@
 //	a.out '(a|aa)(a|aa)' aaa    # (0,2)(0,1)(1,2)
 // 
 // Copyright (c) 2007 Russ Cox.
-// Copyright (c) 2007 Eric Niebler.
+// Copyright (c) 2011 Eric Niebler.
 // Can be distributed under the Boost Softwate License 1.0, see bottom of file.
 
-//#define BOOST_SPIRIT_DEBUG
-//#define _CRTDBG_MAP_ALLOC
+#define BOOST_SPIRIT_DEBUG
+#include <cstring>
+#include <deque>
+#include <vector>
+#include <utility>
 #include <iostream>
 #include <iomanip>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <vector>
-#include <deque>
-#include <list>
-#include <utility>
+#include <boost/config/warning_disable.hpp>
 #include <boost/array.hpp>
 #include <boost/next_prior.hpp>
 #include <boost/shared_ptr.hpp>
-#include <boost/spirit.hpp>
-#include <boost/spirit/phoenix.hpp>
-//#include <crtdbg.h>
-//using namespace boost;
+#include <boost/spirit/include/qi.hpp>
+#include <boost/spirit/include/phoenix_core.hpp>
+#include <boost/spirit/include/phoenix_operator.hpp>
+#include <boost/spirit/include/phoenix_object.hpp>
 
-//enum
-//{
-//    LeftmostBiased = 0,
-//    LeftmostLongest = 1,
-//};
-//
-//enum
-//{
-//    RepeatMinimal = 0,
-//    RepeatLikePerl = 1,
-//};
+namespace qi = boost::spirit::qi;
+namespace ascii = boost::spirit::ascii;
+namespace phoenix = boost::phoenix;
+
+enum
+{
+    LeftmostBiased = 0,
+    LeftmostLongest = 1,
+};
+
+enum
+{
+    RepeatMinimal = 0,
+    RepeatLikePerl = 1,
+};
 
 int debug;
-//int matchtype = LeftmostBiased;
-//int reptype = RepeatMinimal;
+int matchtype = LeftmostBiased;
+int reptype = RepeatMinimal;
 
 enum SubState
 {
@@ -71,6 +72,18 @@ struct Sub
       : std::pair<Iter, Iter>(first_, second_)
       , matched(Unmatched)
     {}
+
+    Sub &operator=(Sub const &sub)
+    {
+        // don't copy singular iterators
+        switch(matched = sub.matched)
+        {
+        case Matched:    second = sub.second;
+        case Incomplete: first  = sub.first;
+        default:;
+        }
+        return *this;
+    }
 
     SubState matched;
 };
@@ -167,41 +180,46 @@ struct REImpl
         if(s == 0 || seen[s->id])
             return;
         seen[s->id] = true;
-        std::printf("%d| ", s->id);
+        std::cout << s->id << "| ";
 
         switch(s->op)
         {
         case Char:
-            std::printf("'%c' -> %d\n", s->data, s->out->id);
+            std::cout << '\'' << (char)s->data << "' -> " << s->out->id << '\n';
             break;
 
         case Any:
-            std::printf(". -> %d\n", s->out->id);
+            std::cout << ". -> " << s->out->id << '\n';
             break;
 
         case Split:
-            std::printf("| -> %d, %d\n", s->out->id, s->out1->id);
+            std::cout << "| -> " << s->out->id << ", " << s->out1->id << '\n';
             break;
 
         case LParen:
-            std::printf("( %d -> %d\n", s->data, s->out->id);
+            std::cout << "( " << s->data << " -> " << s->out->id << '\n';
             break;
 
         case RParen:
-            std::printf(") %d -> %d\n", s->data, s->out->id);
+            std::cout << ") " << s->data << " -> " << s->out->id << '\n';
             break;
 
         case Match:
-            std::printf("match\n");
+            std::cout << "match\n";
             break;
 
         default:
-            std::printf("??? %d\n", s->op);
+            std::cout << "??? " << s->op << '\n';
             break;
         }
 
         dump(s->out, seen);
         dump(s->out1, seen);
+    }
+
+    friend std::ostream &operator <<(std::ostream &sout, REImpl const &reimpl)
+    {
+        return sout << "REImpl";
     }
 
     State const *start;
@@ -226,6 +244,11 @@ struct Frag
 
     State const *start;
     Ptrlist *out;
+
+    friend std::ostream &operator <<(std::ostream &sout, Frag const &frag)
+    {
+        return sout << "Frag";
+    }
 };
 
 // Create singleton list containing just outp.
@@ -394,7 +417,11 @@ struct do_alt_impl : frag3_result
 
 struct next_paren_impl
 {
-    template<typename> struct result { typedef int type; };
+    template<typename>
+    struct result
+    {
+        typedef int type;
+    };
 
     int operator()(REImpl &impl) const
     {
@@ -407,16 +434,15 @@ struct do_regex_impl
     template<typename, typename>
     struct result
     {
-        typedef REImpl type;
+        typedef void type;
     };
 
-    REImpl &operator()(REImpl &impl, Frag f) const
+    void operator()(REImpl &impl, Frag f) const
     {
         f = paren_impl()(impl, f, 0);
         State *s = impl.state(Match, 0, 0, 0);
         patch(f.out, s);
         impl.start = f.start;
-        return impl;
     }
 };
 
@@ -434,102 +460,89 @@ phoenix::function<do_alt_impl> const do_alt = do_alt_impl();
 phoenix::function<do_regex_impl> const do_regex = do_regex_impl();
 phoenix::function<next_paren_impl> const next_paren = next_paren_impl();
 
-struct frag_closure
-  : boost::spirit::closure<frag_closure, Frag>
-{
-    member1 frag;
-};
-
-struct count_closure
-  : boost::spirit::closure<count_closure, int>
-{
-    member1 count;
-};
-
-struct single_closure
-  : boost::spirit::closure<single_closure, Frag, int>
-{
-    member1 frag;
-    member2 count;
-};
-
-struct regex_closure
-  : boost::spirit::closure<regex_closure, REImpl>
-{
-    member1 impl;
-};
-
+template<typename Iter>
 struct regex_grammar
-  : boost::spirit::grammar< regex_grammar, regex_closure::context_t >
+  : qi::grammar<Iter, void(REImpl&)>
 {
-    template<typename Scan>
-    struct definition
+    regex_grammar()
+      : regex_grammar::base_type(regex, "regex grammar")
     {
-        definition(regex_grammar const &self)
-        {
-            using namespace boost::spirit;
-            using namespace phoenix;
-            BOOST_SPIRIT_DEBUG_NODE(regex);
-            BOOST_SPIRIT_DEBUG_NODE(alt);
-            BOOST_SPIRIT_DEBUG_NODE(concat);
-            BOOST_SPIRIT_DEBUG_NODE(repeat);
-            BOOST_SPIRIT_DEBUG_NODE(single);
+        using qi::eps;
+        using ascii::char_;
+        using qi::on_error;
+        using qi::fail;
+        using qi::debug;
+        using namespace qi::labels;
 
-            regex  = alt[ self.impl = do_regex(self.impl, arg1) ];
+        regex  = alt(_r1)[ do_regex(_r1, _1) ];
 
-            alt    = concat[ alt.frag = arg1 ]
-                            >> *('|' >> concat[ alt.frag = do_alt(self.impl, alt.frag, arg1) ]);
+        alt    = concat(_r1)[ _val = _1 ]
+                        >> *('|' >> concat(_r1)[ _val = do_alt(_r1, _val, _1) ]);
 
-            concat = repeat[ concat.frag = arg1 ]
-                            >> *(repeat[ concat.frag = do_concat(concat.frag, arg1) ]);
+        concat = repeat(_r1)[ _val = _1 ]
+                        >> *(repeat(_r1)[ _val = do_concat(_val, _1) ]);
 
-            repeat = single[ repeat.frag = arg1 ]
-                            >> !( (ch_p('*') >> '?')[ repeat.frag = non_greedy_star(self.impl, repeat.frag) ]
-                                | (ch_p('+') >> '?')[ repeat.frag = non_greedy_plus(self.impl, repeat.frag) ]
-                                | (ch_p('?') >> '?')[ repeat.frag = non_greedy_opt(self.impl, repeat.frag) ]
-                                | (ch_p('*'))[ repeat.frag = greedy_star(self.impl, repeat.frag) ]
-                                | (ch_p('+'))[ repeat.frag = greedy_plus(self.impl, repeat.frag) ]
-                                | (ch_p('?'))[ repeat.frag = greedy_opt(self.impl, repeat.frag) ])
-                            ;
+        repeat = single(_r1)[ _val = _1 ]
+                        >> -( (char_('*') >> '?')[ _val = non_greedy_star(_r1, _val) ]
+                            | (char_('+') >> '?')[ _val = non_greedy_plus(_r1, _val) ]
+                            | (char_('?') >> '?')[ _val = non_greedy_opt(_r1, _val) ]
+                            | (char_('*'))[ _val = greedy_star(_r1, _val) ]
+                            | (char_('+'))[ _val = greedy_plus(_r1, _val) ]
+                            | (char_('?'))[ _val = greedy_opt(_r1, _val) ])
+                        ;
 
-            count  = eps_p[ count.count = next_paren(self.impl) ];
+        count  = eps[ _val = next_paren(_r1) ];
 
-            single = ch_p('(') >> '?' >> ':' >> alt[ single.frag = arg1 ] >> ')'
-                   | (ch_p('(') >> count[ single.count = arg1 ] >> alt[ single.frag = arg1 ] >> ')')
-                        [
-                            single.frag = paren(self.impl, single.frag, single.count)
-                        ]
-                   | ch_p('.') [ single.frag = any_char(self.impl) ]
-                   | (~chset_p("|*+?():."))[ single.frag = single_char(self.impl, arg1)]
-                   ;
+        single = char_('(') >> '?' >> ':' >> alt(_r1)[ _val = _1 ] >> ')'
+                | (char_('(') >> count(_r1)[ _a = _1 ] >> alt(_r1)[ _val = _1 ] >> ')')
+                    [
+                        _val = paren(_r1, _val, _a)
+                    ]
+                | char_('.') [ _val = any_char(_r1) ]
+                | (~char_("|*+?():."))[ _val = single_char(_r1, _1)]
+                ;
 
-        }
+        using phoenix::val;
+        using phoenix::construct;
 
-        boost::spirit::rule<Scan> const &start() const
-        {
-            return regex;
-        }
+        on_error<fail>
+        (
+            regex
+          , std::cout
+                << val("ERROR: Expecting ")
+                << _4                               // what failed?
+                << val(" here: \"")
+                << construct<std::string>(_3, _2)   // iterators to error-pos, end
+                << val("\"")
+                << std::endl
+        );
 
-    private:
-        boost::spirit::rule<Scan> regex;
-        boost::spirit::rule<Scan, frag_closure::context_t> alt, concat, repeat;
-        boost::spirit::rule<Scan, count_closure::context_t> count;
-        boost::spirit::rule<Scan, single_closure::context_t> single;
-    };
+        BOOST_SPIRIT_DEBUG_NODE(regex);
+        BOOST_SPIRIT_DEBUG_NODE(alt);
+        BOOST_SPIRIT_DEBUG_NODE(concat);
+        BOOST_SPIRIT_DEBUG_NODE(repeat);
+        BOOST_SPIRIT_DEBUG_NODE(single);
+    }
+
+    qi::rule<Iter, void(REImpl&)> regex;
+    qi::rule<Iter, Frag(REImpl&)> alt, concat, repeat;
+    qi::rule<Iter, int(REImpl&)> count;
+    qi::rule<Iter, Frag(REImpl&), qi::locals<int> > single;
 };
 
-//// Is match a longer than match b?
-//// If so, return 1; if not, 0.
-//int longer(Subs const &a, Subs const &b)
-//{
-//    if(a[0].first == 0)
-//        return 0;
-//    if(b[0].first == 0 || a[0].first < b[0].first)
-//        return 1;
-//    if(a[0].first == b[0].first && a[0].second > b[0].second)
-//        return 1;
-//    return 0;
-//}
+// Is match a longer than match b?
+// If so, return 1; if not, 0.
+template<typename Iter>
+int longer(boost::array<Sub<Iter>, NSUB> const &a, boost::array<Sub<Iter>, NSUB> const &b)
+{
+    if(a[0].matched == Unmatched)
+        return 0;
+    if(b[0].matched == Unmatched || a[0].first < b[0].first)
+        return 1;
+    if(a[0].first == b[0].first && a[0].second > b[0].second)
+        return 1;
+    return 0;
+}
 
 template<typename Iter>
 struct Matcher
@@ -553,17 +566,17 @@ struct Matcher
             if(++ss.visits > 2)
                 return;
 
-            //switch(matchtype)
-            //{
-            //case LeftmostBiased:
-            //    if(reptype == RepeatMinimal || ++ss.visits > 2)
-            //        return;
-            //    break;
-            //case LeftmostLongest:
-            //    if(!longer(m, ss.lastthread->match))
-            //        return;
-            //    break;
-            //}
+            switch(matchtype)
+            {
+            case LeftmostBiased:
+                if(reptype == RepeatMinimal || ++ss.visits > 2)
+                    return;
+                break;
+            case LeftmostLongest:
+                if(!longer(m, ss.lastthread->match))
+                    return;
+                break;
+            }
         }
         else
         {
@@ -621,27 +634,27 @@ struct Matcher
         if(debug)
         {
             dumplist(clist, impl.nparen);
-            std::printf("%c (%d)\n", c, c);
+            std::cout << (char)c << " (" << c << ")\n";
         }
 
         ++extras.listid;
         nlist->n = 0;
 
-        for(int i=0; i<clist->n; ++i)
+        for(int i = 0; i < clist->n; ++i)
         {
             Thread<Iter> *t = &clist->t[i];
 
-            //if(matchtype == LeftmostLongest)
-            //{
-            //    // stop any threads that are worse than the
-            //    // leftmost longest found so far.  the threads
-            //    // will end up ordered on the list by start point,
-            //    // so if this one is too far right, all the rest are too.
-            //    if(subs[0].first && subs[0].first < t->match[0].first)
-            //    {
-            //        break;
-            //    }
-            //}
+            if(matchtype == LeftmostLongest)
+            {
+                // stop any threads that are worse than the
+                // leftmost longest found so far.  the threads
+                // will end up ordered on the list by start point,
+                // so if this one is too far right, all the rest are too.
+                if(subs[0].matched != Unmatched && subs[0].first < t->match[0].first)
+                {
+                    break;
+                }
+            }
 
             switch(t->state->op)
             {
@@ -657,22 +670,22 @@ struct Matcher
                 break;
 
             case Match:
-                //switch(matchtype)
-                //{
-                //case LeftmostBiased:
+                switch(matchtype)
+                {
+                case LeftmostBiased:
                     // best so far ...
                     subs = t->match;
                     // ... because we cut off the worse ones right now!
                     return;
-                //case LeftmostLongest:
-                //    if(longer(t->match, subs))
-                //    {
-                //        subs = t->match;
-                //    }
-                //    break;
-                //default:
-                //    break;
-                //}
+                case LeftmostLongest:
+                    if(longer(t->match, subs))
+                    {
+                        subs = t->match;
+                    }
+                    break;
+                default:
+                    break;
+                }
                 break;
             default:
                 break;
@@ -714,14 +727,14 @@ struct Matcher
 
     void printmatch(boost::array<Sub<Iter>, NSUB> const &m, int n)
     {
-        for(int i=0; i<n; ++i)
+        for(int i = 0; i < n; ++i)
         {
             if(m[i].matched == Matched)
-                std::printf("(%d,%d)", std::distance(begin, m[i].first), std::distance(begin, m[i].second));
+                std::cout << '(' << std::distance(begin, m[i].first) << ',' << std::distance(begin, m[i].second) << ')';
             else if(m[i].matched == Incomplete)
-                std::printf("(%d,?)", std::distance(begin, m[i].first));
+                std::cout << '(' << std::distance(begin, m[i].first) << ",?)";
             else
-                std::printf("(?,?)");
+                std::cout << "(?,?)";
         }
     }
 
@@ -734,10 +747,10 @@ struct Matcher
             {
                 continue;
             }
-            std::printf("  ");
-            std::printf("%d ", t->state->id);
+            std::cout << "  ";
+            std::cout << t->state->id << ' ';
             printmatch(t->match, nparen+1);
-            std::printf("\n");
+            std::cout << '\n';
         }
     }
 
@@ -748,29 +761,25 @@ struct Matcher
     Extras<Iter> extras;
 };
 
-
-
 int main(int argc, char *argv[])
 {
-    //_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
-
     for(;;)
     {
-        if(argc > 1 && strcmp(argv[1], "-d") == 0)
+        if(argc > 1 && std::strcmp(argv[1], "-d") == 0)
         {
             debug++;
             argv[1] = argv[0]; --argc; ++argv;
         }
-        //if(argc > 1 && strcmp(argv[1], "-l") == 0)
-        //{
-        //    matchtype = LeftmostLongest;
-        //    argv[1] = argv[0]; argc--; argv++;
-        //}
-        //else if(argc > 1 && strcmp(argv[1], "-p") == 0)
-        //{
-        //    reptype = RepeatLikePerl;
-        //    argv[1] = argv[0]; argc--; argv++;
-        //}
+        else if(argc > 1 && std::strcmp(argv[1], "-l") == 0)
+        {
+            matchtype = LeftmostLongest;
+            argv[1] = argv[0]; argc--; argv++;
+        }
+        else if(argc > 1 && std::strcmp(argv[1], "-p") == 0)
+        {
+            reptype = RepeatLikePerl;
+            argv[1] = argv[0]; argc--; argv++;
+        }
         else
         {
             break;
@@ -779,12 +788,19 @@ int main(int argc, char *argv[])
 
     if(argc < 3)
     {
-        fprintf(stderr, "usage: %s regexp string...\n", argv[0]);
+        std::cerr << "USAGE: " << argv[0] << " <regexp> string...\n";
         return 1;
     }
 
     REImpl impl;
-    boost::spirit::parse(argv[1], regex_grammar()(impl)[ phoenix::var(impl) = phoenix::arg1 ]);
+    regex_grammar<char const *> regex_parser;
+    const char *begin = argv[1], *end = begin + std::strlen(begin);
+    if (!qi::parse(begin, end, regex_parser(phoenix::ref(impl))) || begin != end)
+    {
+        std::cerr << "ERROR: invalid regex\n";
+        return 1;
+    }
+
     if(debug)
     {
         impl.dump();
@@ -793,16 +809,14 @@ int main(int argc, char *argv[])
     Matcher<std::string::const_iterator> m(impl);
     for(int i=2; i<argc; ++i)
     {
-        std::string const str = argv[i];
+        std::string str(argv[i]);
         if(m.match(str.begin(), str.end()))
         {
-            std::printf("%s: ", argv[i]);
+            std::cout << argv[i] << ": ";
             m.printmatch(m.subs, impl.nparen + 1);
-            std::printf("\n");
+            std::cout << '\n';
         }
     }
-
-    return 0;
 }
 
 /*
